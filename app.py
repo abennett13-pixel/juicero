@@ -51,20 +51,29 @@ def copy_mix_single_from(mah: float, price_per_mah: float, cogs: float) -> None:
 
 
 with st.sidebar:
-    st.header("Global Settings")
-    years = st.slider("Horizon (years)", 3, 10, 5)
-    discount_rate = st.number_input("Discount rate (annual)", value=0.15, step=0.01, format="%.2f")
-    cac = st.number_input("CAC", value=30.0, step=1.0)
+    st.header("Single SKU")
+    mah_per_pack_single = st.number_input("mL per juice bag", value=2.0, step=0.1, format="%.2f", key="sidebar_mah_per_pack")
+    retail_price_per_mah_single = st.number_input("Retail price per mL", value=3.00, step=0.05, format="%.2f", key="sidebar_price_per_mah")
+    cogs_per_pack_single = st.number_input("COGS per juice bag", value=1.55, step=0.05, format="%.2f", key="sidebar_cogs_per_pack")
 
     st.divider()
     st.header("Usage")
     mah_per_month = st.number_input("mL per month", value=60.0, step=1.0)
 
+    # Compute annual packs for bags-per-device ↔ years conversion
+    _annual_packs = (mah_per_month / mah_per_pack_single * 12.0) if mah_per_pack_single > 0 else 1.0
+
     st.divider()
     st.header("Device Duration Scenario")
-    baseline_sd = st.number_input("Baseline service duration (years)", value=1.0, step=0.1, format="%.2f")
-    st.markdown('<p class="scenario-text" style="font-size:0.875rem;margin-bottom:0.25rem;">Scenario service duration (years)</p>', unsafe_allow_html=True)
-    scenario_sd = st.number_input("Scenario service duration (years)", value=1.2, step=0.1, format="%.2f", label_visibility="collapsed")
+    baseline_bpd = st.number_input("Baseline bags per device", value=round(_annual_packs * 1.0), step=10, format="%d")
+    baseline_sd = baseline_bpd / _annual_packs if _annual_packs > 0 else 1.0
+    st.caption(f"({baseline_sd:.2f} years)")
+
+    st.markdown('<p class="scenario-text" style="font-size:0.875rem;margin-bottom:0.25rem;">Scenario bags per device</p>', unsafe_allow_html=True)
+    scenario_bpd = st.number_input("Scenario bags per device", value=round(_annual_packs * 1.2), step=10, format="%d", label_visibility="collapsed")
+    scenario_sd = scenario_bpd / _annual_packs if _annual_packs > 0 else 1.2
+    st.markdown(f'<p class="scenario-text" style="font-size:0.8rem;margin-top:-0.5rem;">({scenario_sd:.2f} years)</p>', unsafe_allow_html=True)
+
     lift_per_year = st.number_input("Retention lift per +1 year durability", value=0.05, step=0.01, format="%.2f")
     st.markdown('<p class="scenario-text" style="font-size:0.875rem;margin-bottom:0.25rem;">Δ Juice Device COGS (scenario)</p>', unsafe_allow_html=True)
     delta_device_cogs = st.number_input("Δ Juice Device COGS (scenario)", value=0.0, step=0.5, format="%.2f", label_visibility="collapsed")
@@ -91,6 +100,12 @@ with st.sidebar:
     st.header("Demand (ladder optimizer)")
     elasticity = st.number_input("Elasticity (mL vs blended price/mL)", value=-2.00, step=0.05, format="%.2f")
 
+    st.divider()
+    st.header("Global Settings")
+    years = st.slider("Horizon (years)", 3, 10, 5)
+    discount_rate = st.number_input("Discount rate (annual)", value=0.15, step=0.01, format="%.2f")
+    cac = st.number_input("CAC", value=30.0, step=1.0)
+
 
 inp = Inputs(
     years=years,
@@ -116,17 +131,8 @@ tabs = st.tabs(["Single SKU", "Consumable Mix (2–3)", "Mix Heatmaps", "Size La
 
 # ---------------- Single SKU ----------------
 with tabs[0]:
-    st.subheader("Single SKU Inputs")
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        mah_per_pack_single = st.number_input("Single SKU mL per juice bag", value=2.0, step=0.1, format="%.2f")
-    with c2:
-        retail_price_per_mah_single = st.number_input("Single SKU retail price per mL", value=3.00, step=0.05, format="%.2f")
-    with c3:
-        cogs_per_pack_single = st.number_input("Single SKU COGS per juice bag", value=1.55, step=0.05, format="%.2f")
     price_per_pack_single = mah_per_pack_single * retail_price_per_mah_single
-    st.caption(f"Computed Single SKU price per juice bag: ${price_per_pack_single:,.2f}")
+    st.caption(f"Single SKU: {mah_per_pack_single:.2f} mL/bag · ${retail_price_per_mah_single:.2f}/mL · ${price_per_pack_single:,.2f}/bag · COGS ${cogs_per_pack_single:.2f}/bag")
 
     single_sku = SKU("Single", mah_per_pack_single, price_per_pack_single, cogs_per_pack_single)
 
