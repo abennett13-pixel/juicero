@@ -127,7 +127,7 @@ inp = Inputs(
 if "saved_scenarios" not in st.session_state:
     st.session_state["saved_scenarios"] = []
 
-tabs = st.tabs(["Single SKU", "Consumable Mix (2–3)", "Mix Heatmaps", "Size Ladder Optimizer", "DCF LTV Analysis", "Investment Strategy Graphs"])
+tabs = st.tabs(["Single SKU", "Consumable Mix (2–3)", "Mix Heatmaps", "Size Ladder Optimizer", "DCF LTV Analysis", "Investment Strategy Graphs", "Compare Scenarios"])
 
 # ---------------- Single SKU ----------------
 with tabs[0]:
@@ -239,6 +239,19 @@ with tabs[0]:
             unsafe_allow_html=True,
         )
 
+    avg_profit_per_ml_scn = retail_price_per_mah_single * res_scn["avg_margin_pct"]
+    avg_profit_per_ml_base = retail_price_per_mah_single * res_base["avg_margin_pct"]
+    d_avg_profit_per_ml = avg_profit_per_ml_scn - avg_profit_per_ml_base
+    pm_col, _ = st.columns([2, 4])
+    with pm_col:
+        st.markdown('<p style="font-size:0.875rem;margin-bottom:0;">Avg profit per mL (scenario)</p>', unsafe_allow_html=True)
+        st.markdown(
+            f'<p style="font-size:1.75rem;font-weight:700;margin:0;">${avg_profit_per_ml_scn:.3f}</p>'
+            + _delta_html(d_avg_profit_per_ml, fmt=".3f", prefix="$"),
+            unsafe_allow_html=True,
+            help="Retail price/mL × avg program margin % — summarizes full portfolio economics (device + consumable) as a single per-mL KPI",
+        )
+
     st.markdown(
         f'<p class="scenario-text"><b>Δ Device COGS:</b> ${delta_device_cogs:,.2f} &nbsp;&nbsp;|&nbsp;&nbsp; '
         f'<b>Δ Service Duration:</b> {scenario_sd - baseline_sd:+.2f} yr '
@@ -263,6 +276,306 @@ with tabs[0]:
         f'<p class="scenario-text"><b>Payback year (scenario):</b> {payback_display}{payback_delta_html}</p>',
         unsafe_allow_html=True,
     )
+
+    # ---- Investment Strategy Graph 1: Average Profit Margin % — Baseline vs Scenario ----
+    st.divider()
+    st.markdown("##### Average Profit Margin % — Scenario vs Baseline Reference")
+    st.markdown(
+        "Both curves show how margin changes across all service durations — blue with no extra device COGS, yellow with your Δ COGS investment. "
+        "Dots mark your current baseline and scenario settings. "
+        "Green shading = scenario beats baseline at that duration; red = scenario is below."
+    )
+    _g1_sd_range = np.linspace(0.0, 2.0, 41)
+    _g1_margins_base = []
+    _g1_margins_scn = []
+    for _sd in _g1_sd_range:
+        _r_bl = ltv_5yr_device_consumables(
+            sku_inp, mah_per_pack=single_sku.mah_per_pack,
+            price_per_pack=single_sku.price_per_pack, cogs_per_pack=single_sku.cogs_per_pack,
+            service_years=float(_sd), delta_device_cogs=0.0,
+        )
+        _r_sc = ltv_5yr_device_consumables(
+            sku_inp, mah_per_pack=single_sku.mah_per_pack,
+            price_per_pack=single_sku.price_per_pack, cogs_per_pack=single_sku.cogs_per_pack,
+            service_years=float(_sd), delta_device_cogs=delta_device_cogs,
+        )
+        _g1_margins_base.append(_r_bl["avg_margin_pct"] * 100)
+        _g1_margins_scn.append(_r_sc["avg_margin_pct"] * 100)
+
+    # Fixed reference point: baseline margin at baseline_sd with no COGS delta
+    _g1_bl_dot = res_base["avg_margin_pct"] * 100
+    _g1_sc_dot = ltv_5yr_device_consumables(
+        sku_inp, mah_per_pack=single_sku.mah_per_pack,
+        price_per_pack=single_sku.price_per_pack, cogs_per_pack=single_sku.cogs_per_pack,
+        service_years=scenario_sd, delta_device_cogs=delta_device_cogs,
+    )["avg_margin_pct"] * 100
+
+    fig_g1, ax_g1 = plt.subplots(figsize=(8, 4))
+    # Baseline curve: margin vs duration with no COGS investment
+    ax_g1.plot(_g1_sd_range, _g1_margins_base, linewidth=2, color="#1f77b4",
+               label="Baseline (Δ COGS $0)")
+    # Scenario curve: margin vs duration with COGS investment
+    ax_g1.plot(_g1_sd_range, _g1_margins_scn, linewidth=2, color="#e6b800",
+               label=f"Scenario (Δ COGS ${delta_device_cogs:.2f})")
+    # Shading between the two curves
+    ax_g1.fill_between(_g1_sd_range, _g1_margins_base, _g1_margins_scn,
+                       where=[s > b for s, b in zip(_g1_margins_scn, _g1_margins_base)],
+                       alpha=0.15, color="#09ab3b", label="Scenario above baseline")
+    ax_g1.fill_between(_g1_sd_range, _g1_margins_base, _g1_margins_scn,
+                       where=[s <= b for s, b in zip(_g1_margins_scn, _g1_margins_base)],
+                       alpha=0.15, color="#ff2b2b", label="Scenario below baseline")
+    # Fixed reference points
+    ax_g1.axvline(baseline_sd, color="#1f77b4", linestyle=":", alpha=0.6)
+    ax_g1.scatter([baseline_sd], [_g1_bl_dot], color="#1f77b4", s=80, zorder=5)
+    ax_g1.annotate(f'Baseline {_g1_bl_dot:.1f}%', xy=(baseline_sd, _g1_bl_dot),
+                   xytext=(-15, -25), textcoords="offset points", fontsize=9, fontweight="bold", color="#1f77b4",
+                   arrowprops=dict(arrowstyle="->", color="#1f77b4", lw=1.5))
+    ax_g1.scatter([scenario_sd], [_g1_sc_dot], color="#e6b800", s=80, zorder=5)
+    ax_g1.annotate(f'Scenario {_g1_sc_dot:.1f}%', xy=(scenario_sd, _g1_sc_dot),
+                   xytext=(15, 10), textcoords="offset points", fontsize=9, fontweight="bold", color="#e6b800",
+                   arrowprops=dict(arrowstyle="->", color="#e6b800", lw=1.5))
+    ax_g1.set_xlabel("Service Duration (years)")
+    ax_g1.set_ylabel("Average Profit Margin (%)")
+    ax_g1.set_title("Average Profit Margin vs Service Duration")
+    ax_g1.set_xlim(0.0, 2.0)
+    ax_g1.legend(fontsize=8)
+    ax_g1.grid(True, alpha=0.3)
+    fig_g1.tight_layout()
+    _g1_col_a, _g1_col_b = st.columns([10, 1])
+    with _g1_col_a:
+        st.pyplot(fig_g1)
+    with _g1_col_b:
+        _g1_buf = io.BytesIO()
+        fig_g1.savefig(_g1_buf, format="png", dpi=150, bbox_inches="tight")
+        _g1_buf.seek(0)
+        st.download_button("PNG", _g1_buf.getvalue(), "margin_baseline_vs_scenario.png", "image/png", key="dl_g1_single")
+    plt.close(fig_g1)
+
+    # ---- Investment Strategy Graph 1b: LTV — Baseline vs Scenario (copy of graph above, LTV instead of margin) ----
+    st.divider()
+    st.markdown("##### Long-Term Value — Scenario vs Baseline Reference")
+    st.markdown(
+        "Both curves show how LTV changes across all service durations — blue with no extra device COGS, yellow with your Δ COGS investment. "
+        "Dots mark your current baseline and scenario settings. "
+        "Green shading = scenario beats baseline at that duration; red = scenario is below."
+    )
+    _g1b_sd_range = np.linspace(0.0, 2.0, 41)
+    _g1b_ltv_base = []
+    _g1b_ltv_scn = []
+    for _sd in _g1b_sd_range:
+        _r_bl = ltv_5yr_device_consumables(
+            sku_inp, mah_per_pack=single_sku.mah_per_pack,
+            price_per_pack=single_sku.price_per_pack, cogs_per_pack=single_sku.cogs_per_pack,
+            service_years=float(_sd), delta_device_cogs=0.0,
+        )
+        _r_sc = ltv_5yr_device_consumables(
+            sku_inp, mah_per_pack=single_sku.mah_per_pack,
+            price_per_pack=single_sku.price_per_pack, cogs_per_pack=single_sku.cogs_per_pack,
+            service_years=float(_sd), delta_device_cogs=delta_device_cogs,
+        )
+        _g1b_ltv_base.append(_r_bl["ltv"])
+        _g1b_ltv_scn.append(_r_sc["ltv"])
+
+    # Fixed reference point: baseline LTV at baseline_sd with no COGS delta
+    _g1b_bl_dot = res_base["ltv"]
+    _g1b_sc_dot = ltv_5yr_device_consumables(
+        sku_inp, mah_per_pack=single_sku.mah_per_pack,
+        price_per_pack=single_sku.price_per_pack, cogs_per_pack=single_sku.cogs_per_pack,
+        service_years=scenario_sd, delta_device_cogs=delta_device_cogs,
+    )["ltv"]
+
+    fig_g1b, ax_g1b = plt.subplots(figsize=(8, 4))
+    # Baseline curve: LTV vs duration with no COGS investment
+    ax_g1b.plot(_g1b_sd_range, _g1b_ltv_base, linewidth=2, color="#1f77b4",
+               label="Baseline (Δ COGS $0)")
+    # Scenario curve: LTV vs duration with COGS investment
+    ax_g1b.plot(_g1b_sd_range, _g1b_ltv_scn, linewidth=2, color="#e6b800",
+               label=f"Scenario (Δ COGS ${delta_device_cogs:.2f})")
+    # Shading between the two curves
+    ax_g1b.fill_between(_g1b_sd_range, _g1b_ltv_base, _g1b_ltv_scn,
+                       where=[s > b for s, b in zip(_g1b_ltv_scn, _g1b_ltv_base)],
+                       alpha=0.15, color="#09ab3b", label="Scenario above baseline")
+    ax_g1b.fill_between(_g1b_sd_range, _g1b_ltv_base, _g1b_ltv_scn,
+                       where=[s <= b for s, b in zip(_g1b_ltv_scn, _g1b_ltv_base)],
+                       alpha=0.15, color="#ff2b2b", label="Scenario below baseline")
+    # Fixed reference points
+    ax_g1b.axvline(baseline_sd, color="#1f77b4", linestyle=":", alpha=0.6)
+    ax_g1b.scatter([baseline_sd], [_g1b_bl_dot], color="#1f77b4", s=80, zorder=5)
+    ax_g1b.annotate(f'Baseline ${_g1b_bl_dot:,.0f}', xy=(baseline_sd, _g1b_bl_dot),
+                   xytext=(-15, -25), textcoords="offset points", fontsize=9, fontweight="bold", color="#1f77b4",
+                   arrowprops=dict(arrowstyle="->", color="#1f77b4", lw=1.5))
+    ax_g1b.scatter([scenario_sd], [_g1b_sc_dot], color="#e6b800", s=80, zorder=5)
+    ax_g1b.annotate(f'Scenario ${_g1b_sc_dot:,.0f}', xy=(scenario_sd, _g1b_sc_dot),
+                   xytext=(15, 10), textcoords="offset points", fontsize=9, fontweight="bold", color="#e6b800",
+                   arrowprops=dict(arrowstyle="->", color="#e6b800", lw=1.5))
+    ax_g1b.set_xlabel("Service Duration (years)")
+    ax_g1b.set_ylabel("Long-Term Value ($)")
+    ax_g1b.set_title("Long-Term Value vs Service Duration")
+    ax_g1b.set_xlim(0.0, 2.0)
+    ax_g1b.legend(fontsize=8)
+    ax_g1b.grid(True, alpha=0.3)
+    fig_g1b.tight_layout()
+    _g1b_col_a, _g1b_col_b = st.columns([10, 1])
+    with _g1b_col_a:
+        st.pyplot(fig_g1b)
+    with _g1b_col_b:
+        _g1b_buf = io.BytesIO()
+        fig_g1b.savefig(_g1b_buf, format="png", dpi=150, bbox_inches="tight")
+        _g1b_buf.seek(0)
+        st.download_button("PNG", _g1b_buf.getvalue(), "ltv_baseline_vs_scenario.png", "image/png", key="dl_g1b_single")
+    plt.close(fig_g1b)
+
+    # ---- Investment Strategy Graph 1c: Average Profit Margin % vs Consumables per Durable (copy of graph 1) ----
+    st.divider()
+    st.markdown("##### Average Profit Margin % — Scenario vs Baseline Reference (by Consumables per Durable)")
+    st.markdown(
+        "Both curves show how margin changes across all service durations — blue with no extra device COGS, yellow with your Δ COGS investment. "
+        "Dots mark your current baseline and scenario settings. "
+        "Green shading = scenario beats baseline at that duration; red = scenario is below."
+    )
+    _g1c_sd_range = np.linspace(0.0, 2.0, 41)
+    _g1c_bpd_range = _g1c_sd_range * bags_per_device_per_year
+    _g1c_margins_base = []
+    _g1c_margins_scn = []
+    for _sd in _g1c_sd_range:
+        _r_bl = ltv_5yr_device_consumables(
+            sku_inp, mah_per_pack=single_sku.mah_per_pack,
+            price_per_pack=single_sku.price_per_pack, cogs_per_pack=single_sku.cogs_per_pack,
+            service_years=float(_sd), delta_device_cogs=0.0,
+        )
+        _r_sc = ltv_5yr_device_consumables(
+            sku_inp, mah_per_pack=single_sku.mah_per_pack,
+            price_per_pack=single_sku.price_per_pack, cogs_per_pack=single_sku.cogs_per_pack,
+            service_years=float(_sd), delta_device_cogs=delta_device_cogs,
+        )
+        _g1c_margins_base.append(_r_bl["avg_margin_pct"] * 100)
+        _g1c_margins_scn.append(_r_sc["avg_margin_pct"] * 100)
+
+    # Fixed reference points: baseline/scenario margin at baseline/scenario bags-per-device
+    _g1c_bl_dot = res_base["avg_margin_pct"] * 100
+    _g1c_bl_bpd = bags_per_device_base
+    _g1c_sc_dot = ltv_5yr_device_consumables(
+        sku_inp, mah_per_pack=single_sku.mah_per_pack,
+        price_per_pack=single_sku.price_per_pack, cogs_per_pack=single_sku.cogs_per_pack,
+        service_years=scenario_sd, delta_device_cogs=delta_device_cogs,
+    )["avg_margin_pct"] * 100
+    _g1c_sc_bpd = bags_per_device
+
+    fig_g1c, ax_g1c = plt.subplots(figsize=(8, 4))
+    # Baseline curve: margin vs consumables per durable with no COGS investment
+    ax_g1c.plot(_g1c_bpd_range, _g1c_margins_base, linewidth=2, color="#1f77b4",
+               label="Baseline (Δ COGS $0)")
+    # Scenario curve: margin vs consumables per durable with COGS investment
+    ax_g1c.plot(_g1c_bpd_range, _g1c_margins_scn, linewidth=2, color="#e6b800",
+               label=f"Scenario (Δ COGS ${delta_device_cogs:.2f})")
+    # Shading between the two curves
+    ax_g1c.fill_between(_g1c_bpd_range, _g1c_margins_base, _g1c_margins_scn,
+                       where=[s > b for s, b in zip(_g1c_margins_scn, _g1c_margins_base)],
+                       alpha=0.15, color="#09ab3b", label="Scenario above baseline")
+    ax_g1c.fill_between(_g1c_bpd_range, _g1c_margins_base, _g1c_margins_scn,
+                       where=[s <= b for s, b in zip(_g1c_margins_scn, _g1c_margins_base)],
+                       alpha=0.15, color="#ff2b2b", label="Scenario below baseline")
+    # Fixed reference points
+    ax_g1c.axvline(_g1c_bl_bpd, color="#1f77b4", linestyle=":", alpha=0.6)
+    ax_g1c.scatter([_g1c_bl_bpd], [_g1c_bl_dot], color="#1f77b4", s=80, zorder=5)
+    ax_g1c.annotate(f'Baseline, {_g1c_bl_bpd:.0f} Consumables, {_g1c_bl_dot:.1f}%', xy=(_g1c_bl_bpd, _g1c_bl_dot),
+                   xytext=(-15, -25), textcoords="offset points", fontsize=9, fontweight="bold", color="#1f77b4",
+                   arrowprops=dict(arrowstyle="->", color="#1f77b4", lw=1.5))
+    ax_g1c.scatter([_g1c_sc_bpd], [_g1c_sc_dot], color="#e6b800", s=80, zorder=5)
+    ax_g1c.annotate(f'Scenario, {_g1c_sc_bpd:.0f} Consumables, {_g1c_sc_dot:.1f}%', xy=(_g1c_sc_bpd, _g1c_sc_dot),
+                   xytext=(15, 10), textcoords="offset points", fontsize=9, fontweight="bold", color="#e6b800",
+                   arrowprops=dict(arrowstyle="->", color="#e6b800", lw=1.5))
+    ax_g1c.set_xlabel("Consumables per Durable")
+    ax_g1c.set_ylabel("Average Profit Margin (%)")
+    ax_g1c.set_title("Average Profit Margin vs Consumables per Durable")
+    ax_g1c.legend(fontsize=8)
+    ax_g1c.grid(True, alpha=0.3)
+    fig_g1c.tight_layout()
+    _g1c_col_a, _g1c_col_b = st.columns([10, 1])
+    with _g1c_col_a:
+        st.pyplot(fig_g1c)
+    with _g1c_col_b:
+        _g1c_buf = io.BytesIO()
+        fig_g1c.savefig(_g1c_buf, format="png", dpi=150, bbox_inches="tight")
+        _g1c_buf.seek(0)
+        st.download_button("PNG", _g1c_buf.getvalue(), "margin_vs_consumables_per_durable.png", "image/png", key="dl_g1c_single")
+    plt.close(fig_g1c)
+
+    # ---- Investment Strategy Graph 1d: LTV vs Consumables per Durable (copy of graph 1b) ----
+    st.divider()
+    st.markdown("##### Long-Term Value — Scenario vs Baseline Reference (by Consumables per Durable)")
+    st.markdown(
+        "Both curves show how LTV changes across all service durations — blue with no extra device COGS, yellow with your Δ COGS investment. "
+        "Dots mark your current baseline and scenario settings. "
+        "Green shading = scenario beats baseline at that duration; red = scenario is below."
+    )
+    _g1d_sd_range = np.linspace(0.0, 2.0, 41)
+    _g1d_bpd_range = _g1d_sd_range * bags_per_device_per_year
+    _g1d_ltv_base = []
+    _g1d_ltv_scn = []
+    for _sd in _g1d_sd_range:
+        _r_bl = ltv_5yr_device_consumables(
+            sku_inp, mah_per_pack=single_sku.mah_per_pack,
+            price_per_pack=single_sku.price_per_pack, cogs_per_pack=single_sku.cogs_per_pack,
+            service_years=float(_sd), delta_device_cogs=0.0,
+        )
+        _r_sc = ltv_5yr_device_consumables(
+            sku_inp, mah_per_pack=single_sku.mah_per_pack,
+            price_per_pack=single_sku.price_per_pack, cogs_per_pack=single_sku.cogs_per_pack,
+            service_years=float(_sd), delta_device_cogs=delta_device_cogs,
+        )
+        _g1d_ltv_base.append(_r_bl["ltv"])
+        _g1d_ltv_scn.append(_r_sc["ltv"])
+
+    # Fixed reference points: baseline/scenario LTV at baseline/scenario bags-per-device
+    _g1d_bl_dot = res_base["ltv"]
+    _g1d_bl_bpd = bags_per_device_base
+    _g1d_sc_dot = ltv_5yr_device_consumables(
+        sku_inp, mah_per_pack=single_sku.mah_per_pack,
+        price_per_pack=single_sku.price_per_pack, cogs_per_pack=single_sku.cogs_per_pack,
+        service_years=scenario_sd, delta_device_cogs=delta_device_cogs,
+    )["ltv"]
+    _g1d_sc_bpd = bags_per_device
+
+    fig_g1d, ax_g1d = plt.subplots(figsize=(8, 4))
+    # Baseline curve: LTV vs consumables per durable with no COGS investment
+    ax_g1d.plot(_g1d_bpd_range, _g1d_ltv_base, linewidth=2, color="#1f77b4",
+               label="Baseline (Δ COGS $0)")
+    # Scenario curve: LTV vs consumables per durable with COGS investment
+    ax_g1d.plot(_g1d_bpd_range, _g1d_ltv_scn, linewidth=2, color="#e6b800",
+               label=f"Scenario (Δ COGS ${delta_device_cogs:.2f})")
+    # Shading between the two curves
+    ax_g1d.fill_between(_g1d_bpd_range, _g1d_ltv_base, _g1d_ltv_scn,
+                       where=[s > b for s, b in zip(_g1d_ltv_scn, _g1d_ltv_base)],
+                       alpha=0.15, color="#09ab3b", label="Scenario above baseline")
+    ax_g1d.fill_between(_g1d_bpd_range, _g1d_ltv_base, _g1d_ltv_scn,
+                       where=[s <= b for s, b in zip(_g1d_ltv_scn, _g1d_ltv_base)],
+                       alpha=0.15, color="#ff2b2b", label="Scenario below baseline")
+    # Fixed reference points
+    ax_g1d.axvline(_g1d_bl_bpd, color="#1f77b4", linestyle=":", alpha=0.6)
+    ax_g1d.scatter([_g1d_bl_bpd], [_g1d_bl_dot], color="#1f77b4", s=80, zorder=5)
+    ax_g1d.annotate(f'Baseline, {_g1d_bl_bpd:.0f} Consumables, ${_g1d_bl_dot:,.0f}', xy=(_g1d_bl_bpd, _g1d_bl_dot),
+                   xytext=(-15, -25), textcoords="offset points", fontsize=9, fontweight="bold", color="#1f77b4",
+                   arrowprops=dict(arrowstyle="->", color="#1f77b4", lw=1.5))
+    ax_g1d.scatter([_g1d_sc_bpd], [_g1d_sc_dot], color="#e6b800", s=80, zorder=5)
+    ax_g1d.annotate(f'Scenario, {_g1d_sc_bpd:.0f} Consumables, ${_g1d_sc_dot:,.0f}', xy=(_g1d_sc_bpd, _g1d_sc_dot),
+                   xytext=(15, 10), textcoords="offset points", fontsize=9, fontweight="bold", color="#e6b800",
+                   arrowprops=dict(arrowstyle="->", color="#e6b800", lw=1.5))
+    ax_g1d.set_xlabel("Consumables per Durable")
+    ax_g1d.set_ylabel("Long-Term Value ($)")
+    ax_g1d.set_title("Long-Term Value vs Consumables per Durable")
+    ax_g1d.legend(fontsize=8)
+    ax_g1d.grid(True, alpha=0.3)
+    fig_g1d.tight_layout()
+    _g1d_col_a, _g1d_col_b = st.columns([10, 1])
+    with _g1d_col_a:
+        st.pyplot(fig_g1d)
+    with _g1d_col_b:
+        _g1d_buf = io.BytesIO()
+        fig_g1d.savefig(_g1d_buf, format="png", dpi=150, bbox_inches="tight")
+        _g1d_buf.seek(0)
+        st.download_button("PNG", _g1d_buf.getvalue(), "ltv_vs_consumables_per_durable.png", "image/png", key="dl_g1d_single")
+    plt.close(fig_g1d)
 
     # ---- Bags per device vs LTV chart ----
     st.divider()
@@ -1376,3 +1689,329 @@ with tabs[5]:
         st.download_button("PNG", _fig_to_png(fig7), "devices_per_user_vs_ltv.png", "image/png", key="dl8")
     plt.close(fig7)
 
+    # ================================================================
+    # 9. Total Cost of Ownership (TCO) Over Time — Cheap vs Premium Device
+    # ================================================================
+    st.divider()
+    st.markdown("##### 9. Total Cost of Ownership (TCO) Over Time — Cheap vs Premium Device")
+    st.markdown(
+        "Shows cumulative business cost per device cohort over time. The cheap device starts lower "
+        "but accumulates higher replacement, support, return, and warranty costs. "
+        "The premium device costs more upfront but eventually crosses under — showing the break-even point."
+    )
+
+    # Inputs: cheap | shared cost | premium
+    tco_col1, tco_col2, tco_col3 = st.columns(3)
+    with tco_col1:
+        st.markdown("**Cheap Device (baseline)**")
+        tco_support_rate_cheap = st.number_input("Support ticket rate (% of devices)", value=15.0, step=1.0, format="%.1f", key="tco_support_cheap") / 100
+        tco_return_rate_cheap  = st.number_input("Return rate (% of devices)",         value=10.0, step=1.0, format="%.1f", key="tco_return_cheap")  / 100
+        tco_warranty_rate_cheap = st.number_input("Warranty claim rate (% of devices)", value=8.0,  step=1.0, format="%.1f", key="tco_warranty_cheap") / 100
+    with tco_col2:
+        st.markdown("**Shared Costs ($)**")
+        tco_cost_support  = st.number_input("Cost per support ticket",   value=25.0,  step=5.0,  format="%.2f", key="tco_cost_support")
+        tco_cost_return   = st.number_input("Cost per return",           value=20.0,  step=5.0,  format="%.2f", key="tco_cost_return")
+        tco_cost_warranty = st.number_input("Cost per warranty claim",   value=40.0,  step=5.0,  format="%.2f", key="tco_cost_warranty")
+        tco_horizon       = st.number_input("TCO horizon (years)",       value=5,     step=1,    format="%d",   key="tco_horizon")
+    with tco_col3:
+        st.markdown("**Premium Device (scenario)**")
+        tco_support_rate_prem = st.number_input("Support ticket rate (% of devices)", value=5.0,  step=1.0, format="%.1f", key="tco_support_prem") / 100
+        tco_return_rate_prem  = st.number_input("Return rate (% of devices)",         value=3.0,  step=1.0, format="%.1f", key="tco_return_prem")  / 100
+        tco_warranty_rate_prem = st.number_input("Warranty claim rate (% of devices)", value=2.0,  step=1.0, format="%.1f", key="tco_warranty_prem") / 100
+
+    # Cost per device (business cost)
+    tco_service_cost_cheap = (tco_support_rate_cheap  * tco_cost_support
+                            + tco_return_rate_cheap   * tco_cost_return
+                            + tco_warranty_rate_cheap  * tco_cost_warranty)
+    tco_service_cost_prem  = (tco_support_rate_prem   * tco_cost_support
+                            + tco_return_rate_prem    * tco_cost_return
+                            + tco_warranty_rate_prem   * tco_cost_warranty)
+
+    tco_c_cheap = device_cogs              + tco_service_cost_cheap   # total cost per cheap device
+    tco_c_prem  = device_cogs + delta_device_cogs + tco_service_cost_prem    # total cost per premium device
+
+    # TCO(t) = cost_per_device × (1 + t/service_duration)
+    # First device at t=0, then continuous replacements
+    tco_t = np.linspace(0, float(tco_horizon), 300)
+    tco_cheap_vals = tco_c_cheap * (1.0 + tco_t / baseline_sd)
+    tco_prem_vals  = tco_c_prem  * (1.0 + tco_t / scenario_sd)
+
+    # Crossover: tco_c_cheap*(1+t/baseline_sd) = tco_c_prem*(1+t/scenario_sd)
+    # t*(tco_c_cheap/baseline_sd - tco_c_prem/scenario_sd) = tco_c_prem - tco_c_cheap
+    _tco_denom = tco_c_cheap / baseline_sd - tco_c_prem / scenario_sd
+    if abs(_tco_denom) > 1e-9:
+        tco_crossover = (tco_c_prem - tco_c_cheap) / _tco_denom
+    else:
+        tco_crossover = None
+
+    fig_tco, ax_tco = plt.subplots(figsize=(9, 4))
+    ax_tco.plot(tco_t, tco_cheap_vals, linewidth=2, color="#1f77b4",
+                label=f"Cheap device (COGS ${device_cogs:.2f}, {baseline_sd:.2f} yr life)")
+    ax_tco.plot(tco_t, tco_prem_vals,  linewidth=2, color="#e6b800",
+                label=f"Premium device (COGS ${device_cogs + delta_device_cogs:.2f}, {scenario_sd:.2f} yr life)")
+
+    # Shade region where premium is cheaper
+    ax_tco.fill_between(tco_t, tco_cheap_vals, tco_prem_vals,
+                        where=tco_prem_vals <= tco_cheap_vals,
+                        alpha=0.15, color="#09ab3b", label="Premium cheaper")
+    ax_tco.fill_between(tco_t, tco_cheap_vals, tco_prem_vals,
+                        where=tco_prem_vals > tco_cheap_vals,
+                        alpha=0.15, color="#ff2b2b", label="Cheap cheaper")
+
+    # Mark crossover
+    if tco_crossover is not None and 0 < tco_crossover <= tco_horizon:
+        tco_cross_y = tco_c_cheap * (1.0 + tco_crossover / baseline_sd)
+        ax_tco.scatter([tco_crossover], [tco_cross_y], color="white", s=120,
+                       zorder=6, edgecolors="black", linewidths=2)
+        ax_tco.annotate(
+            f'Break-even\n{tco_crossover:.2f} yrs\n${tco_cross_y:,.0f}',
+            xy=(tco_crossover, tco_cross_y),
+            xytext=(20, -35), textcoords="offset points",
+            fontsize=9, fontweight="bold", color="white",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="#333333", alpha=0.85),
+            arrowprops=dict(arrowstyle="->", color="white", lw=1.5),
+        )
+    elif tco_crossover is not None and tco_crossover > tco_horizon:
+        ax_tco.text(0.98, 0.05, f"Break-even at {tco_crossover:.1f} yrs\n(beyond horizon)",
+                    transform=ax_tco.transAxes, ha="right", va="bottom",
+                    fontsize=9, color="#aaaaaa",
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="#333333", alpha=0.7))
+    else:
+        ax_tco.text(0.98, 0.05, "No break-even\n(lines don't cross)",
+                    transform=ax_tco.transAxes, ha="right", va="bottom",
+                    fontsize=9, color="#aaaaaa",
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="#333333", alpha=0.7))
+
+    ax_tco.set_xlabel("Time (years)")
+    ax_tco.set_ylabel("Cumulative Cost per Device Cohort ($)")
+    ax_tco.set_title("Total Cost of Ownership: Cheap vs Premium Device")
+    ax_tco.legend(fontsize=8)
+    ax_tco.grid(True, alpha=0.3)
+    fig_tco.tight_layout()
+
+    # Cost breakdown caption
+    st.caption(
+        f"Cheap device cost/unit: COGS ${device_cogs:.2f} + service ${tco_service_cost_cheap:.2f} = ${tco_c_cheap:.2f}  |  "
+        f"Premium device cost/unit: COGS ${device_cogs + delta_device_cogs:.2f} + service ${tco_service_cost_prem:.2f} = ${tco_c_prem:.2f}"
+    )
+    c9a, c9b = st.columns([10, 1])
+    with c9a:
+        st.pyplot(fig_tco)
+    with c9b:
+        st.download_button("PNG", _fig_to_png(fig_tco), "tco_cheap_vs_premium.png", "image/png", key="dl9")
+    plt.close(fig_tco)
+
+
+# ---------------- Compare Scenarios ----------------
+with tabs[6]:
+    st.subheader("Compare Scenarios")
+    st.caption("Compare two independent scenarios across Single SKU, Usage, Device Duration, and Device Economics. Retention curves, discount rate, CAC, complexity, and elasticity are shared from the sidebar.")
+
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        st.markdown("### Scenario A")
+        st.markdown("**Single SKU**")
+        cmp_a_mah = st.number_input("mL per juice bag", value=mah_per_pack_single, step=0.1, format="%.2f", key="cmp_a_mah")
+        cmp_a_price_per_mah = st.number_input("Retail price per mL", value=retail_price_per_mah_single, step=0.05, format="%.2f", key="cmp_a_price_per_mah")
+        cmp_a_cogs = st.number_input("COGS per juice bag", value=cogs_per_pack_single, step=0.05, format="%.2f", key="cmp_a_cogs")
+
+        st.markdown("**Usage**")
+        cmp_a_mah_month = st.number_input("mL per month", value=mah_per_month, step=1.0, key="cmp_a_mah_month")
+
+        st.markdown("**Device Duration**")
+        _cmp_a_annual_packs = (cmp_a_mah_month / cmp_a_mah * 12.0) if cmp_a_mah > 0 else 1.0
+        cmp_a_baseline_bpd = st.number_input("Baseline bags per device", value=round(_cmp_a_annual_packs * 1.0), step=10, format="%d", key="cmp_a_baseline_bpd")
+        cmp_a_baseline_sd = cmp_a_baseline_bpd / _cmp_a_annual_packs if _cmp_a_annual_packs > 0 else 1.0
+        st.caption(f"({cmp_a_baseline_sd:.2f} years)")
+        cmp_a_scenario_bpd = st.number_input("Scenario bags per device", value=round(_cmp_a_annual_packs * 1.2), step=10, format="%d", key="cmp_a_scenario_bpd")
+        cmp_a_scenario_sd = cmp_a_scenario_bpd / _cmp_a_annual_packs if _cmp_a_annual_packs > 0 else 1.2
+        st.caption(f"({cmp_a_scenario_sd:.2f} years)")
+        cmp_a_lift = st.number_input("Retention lift per +1 year durability", value=lift_per_year, step=0.01, format="%.2f", key="cmp_a_lift")
+        cmp_a_delta_cogs = st.number_input("Δ Device COGS", value=delta_device_cogs, step=0.5, format="%.2f", key="cmp_a_delta_cogs")
+
+        st.markdown("**Device Economics**")
+        cmp_a_device_asp = st.number_input("Device ASP", value=device_asp, step=0.5, format="%.2f", key="cmp_a_device_asp")
+        cmp_a_device_cogs = st.number_input("Device COGS (baseline)", value=device_cogs, step=0.5, format="%.2f", key="cmp_a_device_cogs")
+        cmp_a_device_other = st.number_input("Device other costs", value=device_other, step=0.5, format="%.2f", key="cmp_a_device_other")
+
+    with col_b:
+        st.markdown("### Scenario B")
+        st.markdown("**Single SKU**")
+        cmp_b_mah = st.number_input("mL per juice bag", value=mah_per_pack_single, step=0.1, format="%.2f", key="cmp_b_mah")
+        cmp_b_price_per_mah = st.number_input("Retail price per mL", value=retail_price_per_mah_single, step=0.05, format="%.2f", key="cmp_b_price_per_mah")
+        cmp_b_cogs = st.number_input("COGS per juice bag", value=cogs_per_pack_single, step=0.05, format="%.2f", key="cmp_b_cogs")
+
+        st.markdown("**Usage**")
+        cmp_b_mah_month = st.number_input("mL per month", value=mah_per_month, step=1.0, key="cmp_b_mah_month")
+
+        st.markdown("**Device Duration**")
+        _cmp_b_annual_packs = (cmp_b_mah_month / cmp_b_mah * 12.0) if cmp_b_mah > 0 else 1.0
+        cmp_b_baseline_bpd = st.number_input("Baseline bags per device", value=round(_cmp_b_annual_packs * 1.0), step=10, format="%d", key="cmp_b_baseline_bpd")
+        cmp_b_baseline_sd = cmp_b_baseline_bpd / _cmp_b_annual_packs if _cmp_b_annual_packs > 0 else 1.0
+        st.caption(f"({cmp_b_baseline_sd:.2f} years)")
+        cmp_b_scenario_bpd = st.number_input("Scenario bags per device", value=round(_cmp_b_annual_packs * 1.2), step=10, format="%d", key="cmp_b_scenario_bpd")
+        cmp_b_scenario_sd = cmp_b_scenario_bpd / _cmp_b_annual_packs if _cmp_b_annual_packs > 0 else 1.2
+        st.caption(f"({cmp_b_scenario_sd:.2f} years)")
+        cmp_b_lift = st.number_input("Retention lift per +1 year durability", value=lift_per_year, step=0.01, format="%.2f", key="cmp_b_lift")
+        cmp_b_delta_cogs = st.number_input("Δ Device COGS", value=delta_device_cogs, step=0.5, format="%.2f", key="cmp_b_delta_cogs")
+
+        st.markdown("**Device Economics**")
+        cmp_b_device_asp = st.number_input("Device ASP", value=device_asp, step=0.5, format="%.2f", key="cmp_b_device_asp")
+        cmp_b_device_cogs = st.number_input("Device COGS (baseline)", value=device_cogs, step=0.5, format="%.2f", key="cmp_b_device_cogs")
+        cmp_b_device_other = st.number_input("Device other costs", value=device_other, step=0.5, format="%.2f", key="cmp_b_device_other")
+
+    # Build Inputs and SKU objects
+    cmp_inp_a = Inputs(
+        years=years, discount_rate=discount_rate,
+        mah_per_month=cmp_a_mah_month,
+        retention=(r1, r2, r3, r4, r5),
+        baseline_service_years=cmp_a_baseline_sd,
+        retention_lift_per_year=cmp_a_lift,
+        device_asp=cmp_a_device_asp,
+        device_cogs_baseline=cmp_a_device_cogs,
+        device_other_costs=cmp_a_device_other,
+        delta_device_cogs=cmp_a_delta_cogs,
+        scenario_service_years=cmp_a_scenario_sd,
+        cac=cac, annual_complexity_cost=annual_complexity_cost, elasticity=elasticity,
+    )
+    cmp_inp_b = Inputs(
+        years=years, discount_rate=discount_rate,
+        mah_per_month=cmp_b_mah_month,
+        retention=(r1, r2, r3, r4, r5),
+        baseline_service_years=cmp_b_baseline_sd,
+        retention_lift_per_year=cmp_b_lift,
+        device_asp=cmp_b_device_asp,
+        device_cogs_baseline=cmp_b_device_cogs,
+        device_other_costs=cmp_b_device_other,
+        delta_device_cogs=cmp_b_delta_cogs,
+        scenario_service_years=cmp_b_scenario_sd,
+        cac=cac, annual_complexity_cost=annual_complexity_cost, elasticity=elasticity,
+    )
+    cmp_sku_a = SKU("A", cmp_a_mah, cmp_a_mah * cmp_a_price_per_mah, cmp_a_cogs)
+    cmp_sku_b = SKU("B", cmp_b_mah, cmp_b_mah * cmp_b_price_per_mah, cmp_b_cogs)
+
+    cmp_res_a = ltv_5yr_device_consumables(
+        cmp_inp_a, mah_per_pack=cmp_sku_a.mah_per_pack,
+        price_per_pack=cmp_sku_a.price_per_pack, cogs_per_pack=cmp_sku_a.cogs_per_pack,
+        service_years=cmp_a_scenario_sd, delta_device_cogs=cmp_a_delta_cogs,
+    )
+    cmp_res_b = ltv_5yr_device_consumables(
+        cmp_inp_b, mah_per_pack=cmp_sku_b.mah_per_pack,
+        price_per_pack=cmp_sku_b.price_per_pack, cogs_per_pack=cmp_sku_b.cogs_per_pack,
+        service_years=cmp_b_scenario_sd, delta_device_cogs=cmp_b_delta_cogs,
+    )
+
+    # ---- KPI comparison ----
+    st.divider()
+    st.markdown("### Results")
+    hdr_blank, hdr_a_col, hdr_b_col, hdr_delta_col = st.columns([2, 1, 1, 1])
+    hdr_a_col.markdown("**Scenario A**")
+    hdr_b_col.markdown("**Scenario B**")
+    hdr_delta_col.markdown("**B − A**")
+
+    def _cmp_delta_html(val: float, fmt: str = ",.0f", prefix: str = "", suffix: str = "", lower_is_better: bool = False) -> str:
+        positive_good = not lower_is_better
+        is_positive = val >= 0
+        color = ("#09ab3b" if is_positive else "#ff2b2b") if positive_good else ("#ff2b2b" if is_positive else "#09ab3b")
+        arrow = "▲" if is_positive else "▼"
+        sign = "+" if is_positive else ""
+        return f'<span style="color:{color};">{arrow} {sign}{prefix}{val:{fmt}}{suffix}</span>'
+
+    kpi_rows = [
+        ("LTV", f"${cmp_res_a['ltv']:,.0f}", f"${cmp_res_b['ltv']:,.0f}", cmp_res_b['ltv'] - cmp_res_a['ltv'], ",.0f", "$", ""),
+        ("Avg Margin %", f"{cmp_res_a['avg_margin_pct']*100:.1f}%", f"{cmp_res_b['avg_margin_pct']*100:.1f}%",
+         (cmp_res_b['avg_margin_pct'] - cmp_res_a['avg_margin_pct']) * 100, ".2f", "", " pp"),
+        ("12-mo Retention", f"{cmp_res_a['retention_12mo']*100:.1f}%", f"{cmp_res_b['retention_12mo']*100:.1f}%",
+         (cmp_res_b['retention_12mo'] - cmp_res_a['retention_12mo']) * 100, ".1f", "", " pp"),
+        ("LTV:CAC", f"{cmp_res_a['ltv_cac']:.2f}", f"{cmp_res_b['ltv_cac']:.2f}",
+         cmp_res_b['ltv_cac'] - cmp_res_a['ltv_cac'], ".2f", "", ""),
+        ("Payback Year",
+         f"{cmp_res_a['payback_year']:.0f}" if not np.isnan(cmp_res_a['payback_year']) else "N/A",
+         f"{cmp_res_b['payback_year']:.0f}" if not np.isnan(cmp_res_b['payback_year']) else "N/A",
+         (cmp_res_b['payback_year'] - cmp_res_a['payback_year']) if not (np.isnan(cmp_res_a['payback_year']) or np.isnan(cmp_res_b['payback_year'])) else float("nan"),
+         ".0f", "", " yr", True),
+    ]
+    for label, val_a, val_b, delta, fmt, pfx, sfx, *extra in kpi_rows:
+        lower_better = extra[0] if extra else False
+        lbl_col, a_col, b_col, d_col = st.columns([2, 1, 1, 1])
+        lbl_col.markdown(f"**{label}**")
+        a_col.markdown(val_a)
+        b_col.markdown(val_b)
+        if np.isnan(delta):
+            d_col.markdown("N/A")
+        else:
+            d_col.markdown(_cmp_delta_html(delta, fmt, pfx, sfx, lower_is_better=lower_better), unsafe_allow_html=True)
+
+    # ---- LTV vs service duration chart ----
+    st.divider()
+    st.markdown("##### LTV vs Service Duration — A vs B")
+    _cmp_sd_sweep = np.arange(0.5, 5.1, 0.1)
+    _cmp_ltvs_a, _cmp_ltvs_b = [], []
+    for _sd in _cmp_sd_sweep:
+        _cmp_ltvs_a.append(ltv_5yr_device_consumables(
+            cmp_inp_a, mah_per_pack=cmp_sku_a.mah_per_pack,
+            price_per_pack=cmp_sku_a.price_per_pack, cogs_per_pack=cmp_sku_a.cogs_per_pack,
+            service_years=float(_sd), delta_device_cogs=cmp_a_delta_cogs,
+        )["ltv"])
+        _cmp_ltvs_b.append(ltv_5yr_device_consumables(
+            cmp_inp_b, mah_per_pack=cmp_sku_b.mah_per_pack,
+            price_per_pack=cmp_sku_b.price_per_pack, cogs_per_pack=cmp_sku_b.cogs_per_pack,
+            service_years=float(_sd), delta_device_cogs=cmp_b_delta_cogs,
+        )["ltv"])
+
+    fig_cmp1, ax_cmp1 = plt.subplots(figsize=(9, 4))
+    ax_cmp1.plot(_cmp_sd_sweep, _cmp_ltvs_a, linewidth=2, color="#1f77b4", label="Scenario A")
+    ax_cmp1.plot(_cmp_sd_sweep, _cmp_ltvs_b, linewidth=2, color="#e6b800", label="Scenario B")
+    ax_cmp1.scatter([cmp_a_scenario_sd], [cmp_res_a["ltv"]], color="#1f77b4", s=80, zorder=5)
+    ax_cmp1.scatter([cmp_b_scenario_sd], [cmp_res_b["ltv"]], color="#e6b800", s=80, zorder=5)
+    ax_cmp1.annotate(f'A: ${cmp_res_a["ltv"]:,.0f}', xy=(cmp_a_scenario_sd, cmp_res_a["ltv"]),
+                     xytext=(10, 10), textcoords="offset points", fontsize=9, fontweight="bold", color="#1f77b4",
+                     arrowprops=dict(arrowstyle="->", color="#1f77b4", lw=1.5))
+    ax_cmp1.annotate(f'B: ${cmp_res_b["ltv"]:,.0f}', xy=(cmp_b_scenario_sd, cmp_res_b["ltv"]),
+                     xytext=(10, -20), textcoords="offset points", fontsize=9, fontweight="bold", color="#e6b800",
+                     arrowprops=dict(arrowstyle="->", color="#e6b800", lw=1.5))
+    ax_cmp1.set_xlabel("Service Duration (years)")
+    ax_cmp1.set_ylabel("LTV ($)")
+    ax_cmp1.set_title("LTV vs Service Duration: A vs B")
+    ax_cmp1.legend()
+    ax_cmp1.grid(True, alpha=0.3)
+    fig_cmp1.tight_layout()
+    st.pyplot(fig_cmp1)
+    plt.close(fig_cmp1)
+
+    # ---- Margin % vs service duration chart ----
+    st.divider()
+    st.markdown("##### Average Profit Margin % vs Service Duration — A vs B")
+    _cmp_margins_a, _cmp_margins_b = [], []
+    for _sd in _cmp_sd_sweep:
+        _cmp_margins_a.append(ltv_5yr_device_consumables(
+            cmp_inp_a, mah_per_pack=cmp_sku_a.mah_per_pack,
+            price_per_pack=cmp_sku_a.price_per_pack, cogs_per_pack=cmp_sku_a.cogs_per_pack,
+            service_years=float(_sd), delta_device_cogs=cmp_a_delta_cogs,
+        )["avg_margin_pct"] * 100)
+        _cmp_margins_b.append(ltv_5yr_device_consumables(
+            cmp_inp_b, mah_per_pack=cmp_sku_b.mah_per_pack,
+            price_per_pack=cmp_sku_b.price_per_pack, cogs_per_pack=cmp_sku_b.cogs_per_pack,
+            service_years=float(_sd), delta_device_cogs=cmp_b_delta_cogs,
+        )["avg_margin_pct"] * 100)
+
+    fig_cmp2, ax_cmp2 = plt.subplots(figsize=(9, 4))
+    ax_cmp2.plot(_cmp_sd_sweep, _cmp_margins_a, linewidth=2, color="#1f77b4", label="Scenario A")
+    ax_cmp2.plot(_cmp_sd_sweep, _cmp_margins_b, linewidth=2, color="#e6b800", label="Scenario B")
+    ax_cmp2.scatter([cmp_a_scenario_sd], [cmp_res_a["avg_margin_pct"] * 100], color="#1f77b4", s=80, zorder=5)
+    ax_cmp2.scatter([cmp_b_scenario_sd], [cmp_res_b["avg_margin_pct"] * 100], color="#e6b800", s=80, zorder=5)
+    ax_cmp2.annotate(f'A: {cmp_res_a["avg_margin_pct"]*100:.1f}%', xy=(cmp_a_scenario_sd, cmp_res_a["avg_margin_pct"]*100),
+                     xytext=(10, 10), textcoords="offset points", fontsize=9, fontweight="bold", color="#1f77b4",
+                     arrowprops=dict(arrowstyle="->", color="#1f77b4", lw=1.5))
+    ax_cmp2.annotate(f'B: {cmp_res_b["avg_margin_pct"]*100:.1f}%', xy=(cmp_b_scenario_sd, cmp_res_b["avg_margin_pct"]*100),
+                     xytext=(10, -20), textcoords="offset points", fontsize=9, fontweight="bold", color="#e6b800",
+                     arrowprops=dict(arrowstyle="->", color="#e6b800", lw=1.5))
+    ax_cmp2.set_xlabel("Service Duration (years)")
+    ax_cmp2.set_ylabel("Average Profit Margin (%)")
+    ax_cmp2.set_title("Average Profit Margin % vs Service Duration: A vs B")
+    ax_cmp2.legend()
+    ax_cmp2.grid(True, alpha=0.3)
+    fig_cmp2.tight_layout()
+    st.pyplot(fig_cmp2)
+    plt.close(fig_cmp2)
